@@ -22,6 +22,7 @@ do_prep()
 	echo btrfs_file_write_iter > $ftrace/set_graph_function
 	echo function_graph > $ftrace/current_tracer
 	echo funcgraph-tail > $ftrace/trace_options
+	echo funcgraph-proc > $ftrace/trace_options
 
 	# use for tracer 'function'
 	#echo nostacktrace > $ftrace/trace_options
