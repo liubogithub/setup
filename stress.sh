@@ -76,11 +76,14 @@ fi
 
 echo Created $mountpoint/stress directory.
 
+# since we use btrfs that has checksum enabled by default, disable md5sum
 # Construct MD5 sums over the content directory.
 
+: '
 echo -n "Computing MD5 sums over content directory: "
 ( cd $content && find . -type f -print0 | xargs -0 md5sum | sort -o $mountpoint/stress/content.sums )
 echo done.
+'
 
 # Start the stressing processes.
 
@@ -117,6 +120,9 @@ while [ $p -le $nconcurrent ]; do
 
 	    # Compare the content and the copy.
 	    echo -n "R$p "
+
+	    # we test btrfs, disable md5sum diff
+	    : '
 	    ( cd $mountpoint/stress/$p/$base && find . -type f -print0 | xargs -0 md5sum | sort -o /tmp/stress.$$.$p )
 	    diff $mountpoint/stress/content.sums /tmp/stress.$$.$p
 	    if [ $? != 0 ]; then
@@ -125,6 +131,7 @@ while [ $p -le $nconcurrent ]; do
 		exit 1
 	    fi
 	    rm -f /tmp/stress.$$.$p
+	    '
 	done
     ) &
 
