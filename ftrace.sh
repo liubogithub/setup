@@ -18,14 +18,17 @@ do_cleanup()
 do_prep()
 {
 	# use these for tracer 'function_graph'
-	echo 7 > $ftrace/max_graph_depth
-	echo btrfs_file_write_iter > $ftrace/set_graph_function
+	: '
+	echo 3 > $ftrace/max_graph_depth
+	echo do_io_submit > $ftrace/set_graph_function
 	echo function_graph > $ftrace/current_tracer
 	echo funcgraph-tail > $ftrace/trace_options
-	echo funcgraph-proc > $ftrace/trace_options
+	'
 
 	# use for tracer 'function'
-	#echo nostacktrace > $ftrace/trace_options
+	echo btrfs_readpages > $ftrace/set_ftrace_filter
+	echo function > $ftrace/current_tracer
+	echo func_stack_trace > $ftrace/trace_options
 
 	# profile
 	: '
@@ -43,8 +46,9 @@ if [ "x$1" = "xon" ]; then
 
 	# customer command
 	: '
-	rm /mnt/vmdisk/foobar
-	dd if=/dev/zero of=/mnt/vmdisk/foobar bs=512 count=10 oflag=direct
+	tfile=/mnt/btrfs/foobar
+	fallocate -l 100M $tfile
+	dd if=/dev/zero of=$tfile bs=513 count=10 oflag=direct conv=notrunc
 	'
 
 elif [ "x$1" = "xoff" ]; then
