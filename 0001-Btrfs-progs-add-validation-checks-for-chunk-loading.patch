@@ -1,4 +1,4 @@
-From d91ad371bd5bfe592a87f2a9bdad7c78eeab45d6 Mon Sep 17 00:00:00 2001
+From 384dbf62bf71ecf66f434ddb28131a9f5ff8e067 Mon Sep 17 00:00:00 2001
 From: Liu Bo <bo.li.liu@oracle.com>
 Date: Thu, 28 Apr 2016 11:37:12 -0700
 Subject: [PATCH] Btrfs-progs: add validation checks for chunk loading
@@ -21,7 +21,7 @@ Signed-off-by: Liu Bo <bo.li.liu@oracle.com>
  1 file changed, 90 insertions(+), 72 deletions(-)
 
 diff --git a/volumes.c b/volumes.c
-index 4d22db2..99eb9c9 100644
+index 4d22db2..b48febb 100644
 --- a/volumes.c
 +++ b/volumes.c
 @@ -1587,6 +1587,91 @@ static struct btrfs_device *fill_missing_device(u64 devid)
@@ -56,7 +56,7 @@ index 4d22db2..99eb9c9 100644
 +		return -EIO;
 +	}
 +	if (btrfs_chunk_sector_size(leaf, chunk) != root->sectorsize) {
-+		error("invalid chunk sectorsize %llu\n", 
++		error("invalid chunk sectorsize %llu", 
 +		      (unsigned long long)btrfs_chunk_sector_size(leaf, chunk));
 +		return -EIO;
 +	}
@@ -70,7 +70,7 @@ index 4d22db2..99eb9c9 100644
 +	}
 +	/* Check on chunk item type */
 +	if (slot == -1 && (type & BTRFS_BLOCK_GROUP_SYSTEM) == 0) {
-+		error("invalid chunk type %llu\n", type);
++		error("invalid chunk type %llu", type);
 +		return -EIO;
 +	}
 +	if (type & ~(BTRFS_BLOCK_GROUP_TYPE_MASK |
@@ -90,7 +90,7 @@ index 4d22db2..99eb9c9 100644
 +	     BTRFS_SYSTEM_CHUNK_ARRAY_SIZE) ||
 +	    (slot >= 0 && sizeof(struct btrfs_stripe) * (num_stripes - 1) >
 +	     btrfs_item_size_nr(leaf, slot))) {
-+		error("invalid num_stripes: %u\n", num_stripes);
++		error("invalid num_stripes: %u", num_stripes);
 +		return -EIO;
 +	}
 +	/*
@@ -103,7 +103,7 @@ index 4d22db2..99eb9c9 100644
 +	    (type & BTRFS_BLOCK_GROUP_DUP && num_stripes > 2) ||
 +	    ((type & BTRFS_BLOCK_GROUP_PROFILE_MASK) == 0 &&
 +	     num_stripes != 1)) {
-+		error("Invalid num_stripes:sub_stripes %u:%u for profile %llu\n",
++		error("Invalid num_stripes:sub_stripes %u:%u for profile %llu",
 +		      num_stripes, sub_stripes,
 +		      type & BTRFS_BLOCK_GROUP_PROFILE_MASK);
 +		return -EIO;
@@ -156,7 +156,7 @@ index 4d22db2..99eb9c9 100644
 -		return -EIO;
 +	ret = btrfs_check_chunk_valid(root, leaf, chunk, slot, logical);
 +	if (ret) {
-+		error("%s checksums match, but it has an invalid chunk\n",
++		error("%s checksums match, but it has an invalid chunk",
 +		      (slot == -1) ? "Superblock" : "Metadata");
 +		return ret;
  	}
@@ -224,5 +224,5 @@ index 4d22db2..99eb9c9 100644
  
  static int fill_device_from_item(struct extent_buffer *leaf,
 -- 
-2.5.0
+1.8.2.1
 
