@@ -1,7 +1,7 @@
-From ab75a87683752ce52567bc201ec0f9d5b206850b Mon Sep 17 00:00:00 2001
+From 384dbf62bf71ecf66f434ddb28131a9f5ff8e067 Mon Sep 17 00:00:00 2001
 From: Liu Bo <bo.li.liu@oracle.com>
 Date: Thu, 28 Apr 2016 11:37:12 -0700
-Subject: [PATCH 1/3] Btrfs-progs: add validation checks for chunk loading
+Subject: [PATCH] Btrfs-progs: add validation checks for chunk loading
 
 To survive fuzz filesystem images, we need various validation checks to
 make btrfsck detect any invalid value inside chunks including those in
@@ -17,11 +17,11 @@ Reported-by: Vegard Nossum <vegard.nossum@oracle.com>
 Reported-by: Quentin Casasnovas <quentin.casasnovas@oracle.com>
 Signed-off-by: Liu Bo <bo.li.liu@oracle.com>
 ---
- volumes.c | 163 +++++++++++++++++++++++++++++++++++---------------------------
- 1 file changed, 91 insertions(+), 72 deletions(-)
+ volumes.c | 162 ++++++++++++++++++++++++++++++++++----------------------------
+ 1 file changed, 90 insertions(+), 72 deletions(-)
 
 diff --git a/volumes.c b/volumes.c
-index 4d22db2..b0971df 100644
+index 4d22db2..b48febb 100644
 --- a/volumes.c
 +++ b/volumes.c
 @@ -1587,6 +1587,91 @@ static struct btrfs_device *fill_missing_device(u64 devid)
@@ -124,7 +124,7 @@ index 4d22db2..b0971df 100644
  	u64 devid;
  	u8 uuid[BTRFS_UUID_SIZE];
  	int num_stripes;
-@@ -1609,32 +1693,14 @@ static int read_one_chunk(struct btrfs_root *root, struct btrfs_key *key,
+@@ -1609,32 +1693,13 @@ static int read_one_chunk(struct btrfs_root *root, struct btrfs_key *key,
  
  	logical = key->offset;
  	length = btrfs_chunk_length(leaf, chunk);
@@ -156,14 +156,13 @@ index 4d22db2..b0971df 100644
 -		return -EIO;
 +	ret = btrfs_check_chunk_valid(root, leaf, chunk, slot, logical);
 +	if (ret) {
-+		error("%s checksums match, but it has an invalid chunk, %s",
-+		      (slot == -1) ? "Superblock" : "Metadata",
-+		      (slot == -1) ? "try btrfsck --repair -s <superblock> ie, 0,1,2" : "");
++		error("%s checksums match, but it has an invalid chunk",
++		      (slot == -1) ? "Superblock" : "Metadata");
 +		return ret;
  	}
  
  	ce = search_cache_extent(&map_tree->cache_tree, logical);
-@@ -1658,50 +1724,6 @@ static int read_one_chunk(struct btrfs_root *root, struct btrfs_key *key,
+@@ -1658,50 +1723,6 @@ static int read_one_chunk(struct btrfs_root *root, struct btrfs_key *key,
  	map->type = btrfs_chunk_type(leaf, chunk);
  	map->sub_stripes = btrfs_chunk_sub_stripes(leaf, chunk);
  
@@ -214,7 +213,7 @@ index 4d22db2..b0971df 100644
  	for (i = 0; i < num_stripes; i++) {
  		map->stripes[i].physical =
  			btrfs_stripe_offset_nr(leaf, chunk, i);
-@@ -1722,9 +1744,6 @@ static int read_one_chunk(struct btrfs_root *root, struct btrfs_key *key,
+@@ -1722,9 +1743,6 @@ static int read_one_chunk(struct btrfs_root *root, struct btrfs_key *key,
  	BUG_ON(ret);
  
  	return 0;
@@ -225,5 +224,5 @@ index 4d22db2..b0971df 100644
  
  static int fill_device_from_item(struct extent_buffer *leaf,
 -- 
-2.5.0
+1.8.2.1
 
