@@ -13,6 +13,7 @@ do_cleanup()
 	echo > $ftrace/set_graph_function
 	echo > $ftrace/set_ftrace_filter
 	echo 0 > $ftrace/max_graph_depth
+	echo 0 > $ftrace/tracing_thresh
 }
 
 do_prep()
@@ -24,11 +25,18 @@ do_prep()
 	echo function_graph > $ftrace/current_tracer
 	echo funcgraph-tail > $ftrace/trace_options
 	'
+	# time thresh in function_graph (in microsecond)
+	echo 500000 > $ftrace/tracing_thresh
+	echo function_graph > $ftrace/current_tracer
+	echo funcgraph-tail > $ftrace/trace_options
+	echo funcgraph-proc > $ftrace/trace_options
 
 	# use for tracer 'function'
+	: '
 	echo btrfs_readpages > $ftrace/set_ftrace_filter
 	echo function > $ftrace/current_tracer
 	echo func_stack_trace > $ftrace/trace_options
+	'
 
 	# profile
 	: '
@@ -52,7 +60,7 @@ if [ "x$1" = "xon" ]; then
 	'
 
 elif [ "x$1" = "xoff" ]; then
-	echo 0 > $ftrace/tracing_on
+	echo nop > $ftrace/current_tracer
 	#echo 0 > $ftrace/function_profile_enabled
 	echo "now...go check something interesting in trace file......"
 else
