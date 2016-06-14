@@ -1,3 +1,2 @@
-step 1: get_all.sh
-step 2: get_plot.sh
-step 3: get_gdm.sh
+step 1: get_plot.sh
+step 2: get_gdm.sh
