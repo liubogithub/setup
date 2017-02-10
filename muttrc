@@ -2,14 +2,14 @@
 #
 # Me
 #set from = "liub.liubo@gmail.com"
-set from = "your_mail@xxx.com"
-set realname = "Liu Bo"
 
 # Credentials
 # gmail
 #set smtp_url = "smtp://liub.liubo@gmail.com@smtp.gmail.com:587/"
 #set imap_user = "liub.liubo@gmail.com"
-source "gpg -d ~/.mutt/password.gpg |"
+
+# gpg -r <email> -e ~/.mutt/password
+source "gpg2 -d ~/.mutt/password.gpg |"
 
 # Mailboxes
 #set folder = "imaps://imap.gmail.com:993"
@@ -25,6 +25,7 @@ set message_cachedir = "~/.mutt/cache/bodies"
 set certificate_file = "~/.mutt/certificates"
 
 # Maillist
+
 
 # Etc
 set mail_check = 10
@@ -44,13 +45,13 @@ set quit = ask-yes
 #
 #
 # Colors
-color index	red	default	"~D"	#delete
-color index	brightblue	default	"~T"
-color index      brightgreen      default    "~F"
-color index      yellow         default    "~N"
-color index      brightyellow   default    "~N ~p"
-color index      brightmagenta   default    "~P"
-color index      magenta   default    "~C your_mail_addr@gmail.com"
+#color index	red	default	"~D"	#delete
+#color index	brightblue	default	"~T"
+#color index      brightgreen      default    "~F"
+#color index      yellow         default    "~N"
+#color index      brightyellow   default    "~N ~p"
+#color index      brightmagenta   default    "~P"
+#color index      magenta   default    "~C bo.li.liu@oracle.com"
 
 # Alias
 set alias_file = "~/.mutt/alias_file"
@@ -68,4 +69,5 @@ alternative_order text/plain text/html
 set signature = ~/.mutt/signature
 set sig_dashes = no
 
-set pager_index_lines=10
+set pager_index_lines=5
+set editor="emacs --no-init-file --load ~/.mutt/emacs-mail +7:0"
