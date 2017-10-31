@@ -1,0 +1,63 @@
+----------------------------------------------------------------------------------------------------------
+# writeback thread (buffered IO writes)
+->writepage()
+   | __extent_writepage()
+       | run_delalloc_range() # gather adjacent pages to form an extent
+       	 		      # and create ordered_extent to track it
+       | submit_extent_page()
+            | ->submit_bio_hook()
+                | btrfs_submit_bio_hook()
+                    | btrfs_map_bio()
+                        | submit_stripe_bio()
+                             | btrfs_schedule_bio() # schedule bio on helper kthread for submission
+			     | OR submit_bio()      # In case of fsync, bio is submitted instead of
+			       	  		    # being schedule to helper kthread
+
+----------------------------------------------------------------------------------------------------------
+# helper kthread
+run_scheduled_bio()
+   | submit_bio()
+       | # block layer
+
+----------------------------------------------------------------------------------------------------------
+# direct IO writes
+->file_write_iter()
+   | btrfs_file_write_iter()
+      | btrfs_direct_write()
+         | generic_file_write_iter()
+	    | btrfs_direct_IO()
+	        | __blockdev_direct_IO()
+		    | do_blockdev_direct_IO()
+		        | btrfs_get_blocks_direct() # create an extent and ordered_extent to track it
+			| btrfs_submit_direct()
+			    | btrfs_submit_direct_hook() # If (IO > 64K && !raid56 profile),
+			      				 # then split IO to several IOs of 64K,
+							 # otherwise continue as is.
+			        | btrfs_map_bio() # map filesystem logical address to physical
+				  		  # address per device
+				    | submit_stripe_bio()
+				       | submit_bio() # submit the bio directly for performance wise.
+				       | OR btrfs_schedule_bio() # if (IO > 64K && !raid56 profile),
+				       	    			 # then schedule bio on helper kthread
+								 # for submission
+
+----------------------------------------------------------------------------------------------------------
+# end io
+# from interrupt
+bio_endio()
+   | btrfs_end_bio()
+      | btrfs_end_bbio()
+         | bio_end()
+	    | end_bio_extent_writepage()
+	       | ->writepage_end_io_hook()
+	           | btrfs_writepage_end_io_hook() # schedule finish_ordered_fn() to helper kthread
+	       | end_page_writeback()
+
+----------------------------------------------------------------------------------------------------------
+# helper kthread for finish_ordered_fn
+finish_ordered_fn()
+  | btrfs_finish_orderd_io()
+     | insert_reserved_file_extent() # update btree:fs_tree with new extent
+       				     # [start, start + len) is represented by ordered_extent
+     | add_pending_csums() # update btree:csum_tree with new checksum
+     | free ordered_extent()
