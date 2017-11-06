@@ -1,0 +1,34 @@
+- free space cache btree (4.5)
+
+- default inline limit is now 2048 (instead of page size, usually
+  4096) (4.6)
+
+- replace race fixes (4.7, 4.12)
+
+  Make replace wait for outstanding bios to complete.
+
+- ticket system for metadata reservation (4.8)
+
+  Improve latency (mainly) and fairness when running out of metadata
+  space (multiple threads can be blocked on flushing to reclaim
+  metadata).
+
+- perf. improvement about delayed ref (4.10)
+
+  Lots of remove ops but only few add ops, introduce a seperate list
+  for add delayed refs.
+
+- auto-repair for raid56 profile (4.12)
+
+- scrub leading to wrong raid56 parity (4.12)
+
+-------------------------------------------------
+- ENOSPC corner cases
+
+  unlink large files 
+
+- send/receive fixes
+
+- security fixes (fuzzed tests)
+
+- Kill BUG_ON() (stability fixes)
