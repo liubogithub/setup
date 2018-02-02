@@ -6,3 +6,5 @@
 
 4. locks: "lock and unlock" pair
 
+5. API: "list_add(new, head)"
+
