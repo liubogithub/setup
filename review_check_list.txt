@@ -1,0 +1,8 @@
+1. objects: "allocation and free" pair
+
+2. objects: "get ref and put ref" pair
+
+3. objects: "add and delete" pair
+
+4. locks: "lock and unlock" pair
+
