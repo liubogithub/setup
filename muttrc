@@ -39,6 +39,7 @@ set sleep_time = 0
 set beep_new
 set imap_check_subscribed
 set quit = ask-yes
+unset use_domain
 
 # Macros
 #bind index \Cr imap-fetch-mail
