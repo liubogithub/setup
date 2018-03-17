@@ -39,7 +39,7 @@ GDB="-gdb tcp:localhost:7499"
 #-net user,vlan=0,hostfwd=tcp::2222-:22 \
 #-append 'root=/dev/sda1 ro console=ttyS0 kmemleak=off ftrace_dump_on_oops memmap=4G!4G' \
 
-/usr/bin/qemu-system-x86_64 --enable-kvm -nographic \
+/usr/bin/qemu-system-x86_64 -enable-kvm -nographic \
 -kernel ${BZIMAGE}  \
 -append 'root=/dev/sda1 ro console=ttyS0 kmemleak=off ftrace_dump_on_oops' \
 -m ${MEM} \
