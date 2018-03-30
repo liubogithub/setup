@@ -1,0 +1,79 @@
+# my own muttrc
+#
+# Me
+set from = "obuil.liubo@gmail.com"
+set realname = "Liu Bo"
+
+# Credentials
+# gmail
+set smtp_url = "smtp://obuil.liubo@gmail.com@smtp.gmail.com:587/"
+set imap_user = "obuil.liubo@gmail.com"
+set ssl_force_tls = yes # Require encrypted connection
+
+# gpg -r <email> -e ~/.mutt/password
+source "gpg -d ~/.mutt/gmail_passwd.gpg |"
+
+# Mailboxes
+set folder = "imaps://imap.gmail.com:993"
+set spoolfile = "+INBOX"
+set postponed = "+[Gmail]/Drafts"
+set postponed = "+Drafts"
+set record = "+Sent"
+mailboxes "=INBOX"
+
+
+# Where to put the stuff
+set header_cache = "~/.mutt/cache/headers"
+set message_cachedir = "~/.mutt/cache/bodies"
+set certificate_file = "~/.mutt/certificates"
+
+# Maillist
+
+
+# Etc
+set mail_check = 10
+set move = no
+set imap_keepalive = 50
+unset imap_passive
+set sort = threads
+set sort_aux = last-date-received
+set sleep_time = 0
+set beep_new
+set imap_check_subscribed
+set quit = ask-yes
+unset use_domain
+
+# Macros
+#bind index \Cr imap-fetch-mail
+#
+#
+# Colors
+color index	red	default	"~D"	#delete
+color index	brightblue	default	"~T"
+color index      brightgreen      default    "~F"
+color index      yellow         default    "~N"
+color index      brightyellow   default    "~N ~p"
+color index      brightmagenta   default    "~P"
+color index      magenta   default    "~C obuil.liubo@gmail.com"
+
+# Alias
+set alias_file = "~/.mutt/alias_file"
+source $alias_file
+
+# mailcap
+set mailcap_path 	= /home/boliu/.mutt/mailcap
+alternative_order text/plain text/html
+
+# sidebar
+set sidebar_width   = 24
+set sidebar_visible = yes
+set sidebar_format = "%B%?F? [%F]?%* %?N?%N/?%S"
+set mail_check_stats
+
+#
+# signature
+set signature = ~/.mutt/signature
+set sig_dashes = no
+
+set pager_index_lines=5
+set editor="emacs -nw --no-init-file --load ~/.mutt/emacs-mail +7:0"
