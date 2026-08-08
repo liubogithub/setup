@@ -164,14 +164,20 @@ fn arg_str_or<'a>(args: &'a Value, key: &str, default: &'a str) -> &'a str {
 /// the sandbox (the current working directory tree).
 fn resolve_sandboxed(path: &str) -> Result<PathBuf> {
     let cwd = std::env::current_dir()?;
+    resolve_within(&cwd, path)
+}
+
+/// Pure sandbox resolution: join `path` onto `base`, normalize `.`/`..`
+/// lexically (so not-yet-created files work), and reject escapes from `base`.
+/// Split out from `resolve_sandboxed` so it can be unit-tested without touching
+/// the process-wide cwd.
+fn resolve_within(base: &std::path::Path, path: &str) -> Result<PathBuf> {
     let joined = if std::path::Path::new(path).is_absolute() {
         PathBuf::from(path)
     } else {
-        cwd.join(path)
+        base.join(path)
     };
 
-    // Normalize `.`/`..` lexically without requiring the path to exist yet
-    // (write_file may target a not-yet-created file).
     let mut normalized = PathBuf::new();
     for comp in joined.components() {
         use std::path::Component::*;
@@ -184,10 +190,10 @@ fn resolve_sandboxed(path: &str) -> Result<PathBuf> {
         }
     }
 
-    if !normalized.starts_with(&cwd) {
+    if !normalized.starts_with(base) {
         bail!(
             "path `{path}` resolves outside the working directory; access is sandboxed to {}",
-            cwd.display()
+            base.display()
         );
     }
     Ok(normalized)
@@ -387,5 +393,85 @@ pub fn preview(name: &str, args: &Value) -> Option<String> {
             .and_then(Value::as_str)
             .map(|c| format!("run: {c}")),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    use std::path::Path;
+
+    #[test]
+    fn sandbox_allows_nested_paths() {
+        let base = Path::new("/home/user/project");
+        let p = resolve_within(base, "src/main.rs").unwrap();
+        assert_eq!(p, Path::new("/home/user/project/src/main.rs"));
+    }
+
+    #[test]
+    fn sandbox_normalizes_curdir() {
+        let base = Path::new("/home/user/project");
+        let p = resolve_within(base, "./a/./b.txt").unwrap();
+        assert_eq!(p, Path::new("/home/user/project/a/b.txt"));
+    }
+
+    #[test]
+    fn sandbox_rejects_parent_escape() {
+        let base = Path::new("/home/user/project");
+        assert!(resolve_within(base, "../secret.txt").is_err());
+        assert!(resolve_within(base, "a/../../secret.txt").is_err());
+    }
+
+    #[test]
+    fn sandbox_rejects_absolute_outside() {
+        let base = Path::new("/home/user/project");
+        assert!(resolve_within(base, "/etc/passwd").is_err());
+    }
+
+    #[test]
+    fn sandbox_allows_absolute_inside() {
+        let base = Path::new("/home/user/project");
+        let p = resolve_within(base, "/home/user/project/x").unwrap();
+        assert_eq!(p, Path::new("/home/user/project/x"));
+    }
+
+    #[test]
+    fn truncate_leaves_short_output_untouched() {
+        let s = "hello".to_string();
+        assert_eq!(truncate_output(s.clone()), s);
+    }
+
+    #[test]
+    fn truncate_caps_long_output() {
+        let s = "x".repeat(MAX_OUTPUT_BYTES + 100);
+        let out = truncate_output(s);
+        assert!(out.len() < MAX_OUTPUT_BYTES + 100);
+        assert!(out.contains("truncated"));
+    }
+
+    #[test]
+    fn needs_permission_matches_mutating_tools() {
+        assert!(needs_permission("write_file"));
+        assert!(needs_permission("edit_file"));
+        assert!(needs_permission("bash"));
+        assert!(!needs_permission("read_file"));
+        assert!(!needs_permission("search"));
+        assert!(!needs_permission("list_files"));
+    }
+
+    #[test]
+    fn edit_preview_shows_diff_markers() {
+        let args = json!({"path": "f.txt", "old_string": "foo", "new_string": "bar"});
+        let preview = preview("edit_file", &args).unwrap();
+        assert!(preview.contains("- foo"));
+        assert!(preview.contains("+ bar"));
+    }
+
+    #[test]
+    fn bash_preview_shows_command() {
+        let args = json!({"command": "ls -la"});
+        let preview = preview("bash", &args).unwrap();
+        assert!(preview.contains("ls -la"));
     }
 }

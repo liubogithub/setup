@@ -8,6 +8,9 @@ current working directory.
 ## Features
 
 - Interactive REPL and one-shot (`--prompt`) modes
+- **Streaming** responses: assistant text prints live as it arrives, with an
+  automatic fallback to a non-streaming, auto-retrying request if the stream drops
+- **REPL slash commands**: `/help`, `/clear` (`/reset`), `/tokens`, `/model [name]`, `/exit`
 - Tools: `read_file`, `write_file`, `edit_file`, `list_files`, `search`, `bash`
 - Permission gate with a diff preview before each mutating action; answer
   **y**es / **n**o / **a**llow-all-this-session (bypass entirely with `--yes`)
@@ -60,7 +63,24 @@ flashcode -p "Add a docstring to src/lib.rs"
 flashcode --yes -p "Create a hello.txt with 'hi'"
 ```
 
-In the REPL, type `/exit` or press Ctrl-D to quit.
+In the REPL, type `/exit` or press Ctrl-D to quit. Other commands:
+
+| Command | Effect |
+| ------- | ------ |
+| `/help` | List available commands |
+| `/clear`, `/reset` | Clear the conversation history (keeps session token count) |
+| `/tokens` | Show session token usage and history size |
+| `/model [name]` | Show the active model, or switch to `name` |
+| `/exit`, `/quit` | Leave flashcode |
+
+## Testing
+
+```sh
+cargo test
+```
+
+Unit tests cover the path sandbox (escape rejection, normalization), output
+truncation, the permission classifier, and the diff/command previews.
 
 ## Architecture
 

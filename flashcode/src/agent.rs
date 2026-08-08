@@ -46,28 +46,41 @@ impl Agent {
         }
     }
 
+    /// Clear the conversation history, keeping the system prompt.
+    /// Session token totals are preserved.
+    pub fn reset(&mut self) {
+        self.messages.truncate(0);
+        self.messages.push(Message::system(SYSTEM_PROMPT));
+    }
+
+    pub fn model(&self) -> &str {
+        self.client.model()
+    }
+
+    pub fn set_model(&mut self, model: &str) {
+        self.client.set_model(model);
+    }
+
+    pub fn session_tokens(&self) -> u64 {
+        self.session_tokens
+    }
+
+    /// Number of non-system messages currently in the history.
+    pub fn history_len(&self) -> usize {
+        self.messages.iter().filter(|m| m.role != "system").count()
+    }
+
     /// Run one user turn to completion (through any number of tool calls).
     pub async fn handle_turn(&mut self, user_input: &str) -> Result<()> {
         self.messages.push(Message::user(user_input));
 
         for _ in 0..MAX_STEPS {
-            let result = self
-                .client
-                .chat(&self.messages, tools::definitions())
-                .await?;
+            let result = self.model_turn().await?;
 
             if let Some(usage) = &result.usage {
                 self.record_usage(usage);
             }
             let reply = result.message;
-
-            // Print any assistant prose.
-            if let Some(text) = &reply.content {
-                let trimmed = text.trim();
-                if !trimmed.is_empty() {
-                    println!("\n{trimmed}\n");
-                }
-            }
 
             let tool_calls = reply.tool_calls.clone();
             self.messages.push(reply);
@@ -87,6 +100,46 @@ impl Agent {
             "(stopped: reached the maximum of {MAX_STEPS} steps for this turn)"
         )));
         Ok(())
+    }
+
+    /// Run one model call for the current message history. Streams the response
+    /// (printing text live); if the stream connection fails, retries once with
+    /// the non-streaming, auto-retrying `chat` path.
+    async fn model_turn(&self) -> Result<crate::api::ChatResult> {
+        let mut streamed_any = false;
+        let mut stdout = std::io::stdout();
+        println!();
+
+        let streamed = self
+            .client
+            .chat_stream(&self.messages, tools::definitions(), |delta| {
+                use std::io::Write;
+                streamed_any = true;
+                print!("{delta}");
+                let _ = stdout.flush();
+            })
+            .await;
+
+        match streamed {
+            Ok(result) => {
+                if streamed_any {
+                    println!("\n");
+                }
+                Ok(result)
+            }
+            Err(e) => {
+                // Streaming failed mid-flight: fall back to the robust path.
+                println!("{}", ui::dim(&format!("  [stream failed: {e}; retrying non-streamed]")));
+                let result = self.client.chat(&self.messages, tools::definitions()).await?;
+                if let Some(text) = &result.message.content {
+                    let t = text.trim();
+                    if !t.is_empty() {
+                        println!("{t}\n");
+                    }
+                }
+                Ok(result)
+            }
+        }
     }
 
     fn record_usage(&mut self, usage: &Usage) {
