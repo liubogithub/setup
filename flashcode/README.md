@@ -8,15 +8,12 @@ current working directory.
 ## Features
 
 - Interactive REPL and one-shot (`--prompt`) modes
-- **Streaming** responses: assistant text prints live as it arrives, with an
-  automatic fallback to a non-streaming, auto-retrying request if the stream drops
-- **REPL slash commands**: `/help`, `/clear` (`/reset`), `/tokens`, `/model [name]`, `/exit`
+- **Streaming** responses: assistant text prints live as it arrives
+- **REPL slash commands**: `/help`, `/clear` (`/reset`), `/tokens`, `/exit`
 - Tools: `read_file`, `write_file`, `edit_file`, `list_files`, `search`, `bash`
 - Permission gate with a diff preview before each mutating action; answer
   **y**es / **n**o / **a**llow-all-this-session (bypass entirely with `--yes`)
 - Sandboxed: all file/shell access is confined to the working directory tree
-- Robust API client: request timeout + automatic retry with backoff on
-  transient errors (network failures, HTTP 429/5xx)
 - Per-call and per-session token usage reporting
 - Colored output (auto-disabled when piped or when `NO_COLOR` is set)
 - Configurable model / base URL / key via env vars or a config file
@@ -69,8 +66,7 @@ In the REPL, type `/exit` or press Ctrl-D to quit. Other commands:
 | ------- | ------ |
 | `/help` | List available commands |
 | `/clear`, `/reset` | Clear the conversation history (keeps session token count) |
-| `/tokens` | Show session token usage and history size |
-| `/model [name]` | Show the active model, or switch to `name` |
+| `/tokens` | Show session token usage |
 | `/exit`, `/quit` | Leave flashcode |
 
 ## Testing
@@ -87,7 +83,7 @@ truncation, the permission classifier, and the diff/command previews.
 | Module        | Responsibility                                                        |
 | ------------- | --------------------------------------------------------------------- |
 | `config.rs`   | Load settings from env + `config.toml`                                |
-| `api.rs`      | DeepSeek chat client; OpenAI-compatible types, retries, token usage   |
+| `api.rs`      | DeepSeek streaming chat client; OpenAI-compatible types + token usage |
 | `tools.rs`    | Tool JSON schemas, handlers, sandbox, and diff previews               |
 | `agent.rs`    | The agent loop: chat → run tools → feed results back, permission gate |
 | `ui.rs`       | ANSI coloring helpers (TTY- and `NO_COLOR`-aware)                     |

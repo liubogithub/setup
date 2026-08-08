@@ -84,25 +84,12 @@ struct ChatRequest<'a> {
     temperature: f32,
     stream: bool,
     /// Ask the API to include a usage block on the final streamed chunk.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    stream_options: Option<StreamOptions>,
+    stream_options: StreamOptions,
 }
 
 #[derive(Serialize)]
 struct StreamOptions {
     include_usage: bool,
-}
-
-#[derive(Deserialize)]
-struct ChatResponse {
-    choices: Vec<Choice>,
-    #[serde(default)]
-    usage: Option<Usage>,
-}
-
-#[derive(Deserialize)]
-struct Choice {
-    message: Message,
 }
 
 /// Token accounting returned by the API (fields optional across providers).
@@ -186,58 +173,9 @@ impl Client {
         Client { http, config }
     }
 
-    pub fn model(&self) -> &str {
-        &self.config.model
-    }
-
-    /// Override the active model (used by the REPL `/model` command).
-    pub fn set_model(&mut self, model: impl Into<String>) {
-        self.config.model = model.into();
-    }
-
-    /// Send one non-streaming chat completion request. Used as the fallback when
-    /// a stream drops mid-response. Returns the assistant message and token usage.
-    pub async fn chat(&self, messages: &[Message], tools: Vec<ToolDef>) -> Result<ChatResult> {
-        let url = format!("{}/chat/completions", self.config.base_url);
-        let body = ChatRequest {
-            model: &self.config.model,
-            messages,
-            tools,
-            temperature: 0.0,
-            stream: false,
-            stream_options: None,
-        };
-
-        let resp = self
-            .http
-            .post(&url)
-            .bearer_auth(&self.config.api_key)
-            .json(&body)
-            .send()
-            .await
-            .context("sending request to DeepSeek")?;
-
-        let status = resp.status();
-        let text = resp.text().await.context("reading response body")?;
-        if !status.is_success() {
-            bail!("DeepSeek API error ({status}): {text}");
-        }
-
-        let parsed: ChatResponse =
-            serde_json::from_str(&text).with_context(|| format!("parsing response: {text}"))?;
-        let message = parsed
-            .choices
-            .into_iter()
-            .next()
-            .map(|c| c.message)
-            .context("response contained no choices")?;
-        Ok(ChatResult { message, usage: parsed.usage })
-    }
-
-    /// Streaming variant: sends `stream: true`, invokes `on_text` with each
-    /// content delta as it arrives, and returns the fully assembled message and
-    /// usage once the stream completes. Falls back to no retry (a stream that
-    /// dies mid-flight is surfaced as an error for the caller to handle).
+    /// Send a chat completion, streaming the response. Invokes `on_text` with
+    /// each content delta as it arrives, and returns the fully assembled message
+    /// and token usage once the stream completes.
     pub async fn chat_stream<F: FnMut(&str)>(
         &self,
         messages: &[Message],
@@ -251,7 +189,7 @@ impl Client {
             tools,
             temperature: 0.0,
             stream: true,
-            stream_options: Some(StreamOptions { include_usage: true }),
+            stream_options: StreamOptions { include_usage: true },
         };
 
         let resp = self

@@ -67,11 +67,10 @@ async fn main() -> Result<()> {
 
         // Slash commands are handled locally, without hitting the model.
         if input.starts_with('/') {
-            match handle_command(input, &mut agent) {
-                Command::Continue => continue,
-                Command::Quit => break,
-                Command::NotACommand => {} // fall through to the model
+            if handle_command(input, &mut agent) {
+                break; // command requested quit
             }
+            continue;
         }
 
         if let Err(e) = agent.handle_turn(input).await {
@@ -82,51 +81,23 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-enum Command {
-    Continue,
-    Quit,
-    NotACommand,
-}
-
-/// Handle a REPL slash command. Returns whether to continue, quit, or (for an
-/// unrecognized `/...`) fall through to the model.
-fn handle_command(input: &str, agent: &mut Agent) -> Command {
-    let mut parts = input.split_whitespace();
-    let cmd = parts.next().unwrap_or("");
-    let rest = parts.collect::<Vec<_>>().join(" ");
-
-    match cmd {
-        "/exit" | "/quit" => return Command::Quit,
-        "/help" => {
-            println!(
-                "commands:\n  \
-                 /help          show this help\n  \
-                 /clear, /reset clear the conversation history\n  \
-                 /tokens        show session token usage and history size\n  \
-                 /model [name]  show or switch the active model\n  \
-                 /exit, /quit   leave flashcode"
-            );
-        }
+/// Handle a REPL slash command. Returns true if the user asked to quit.
+fn handle_command(input: &str, agent: &mut Agent) -> bool {
+    match input {
+        "/exit" | "/quit" => return true,
+        "/help" => println!(
+            "commands:\n  \
+             /help          show this help\n  \
+             /clear, /reset clear the conversation history\n  \
+             /tokens        show session token usage\n  \
+             /exit, /quit   leave flashcode"
+        ),
         "/clear" | "/reset" => {
             agent.reset();
             println!("(conversation cleared)");
         }
-        "/tokens" => {
-            println!(
-                "session tokens: {} | messages in history: {}",
-                agent.session_tokens(),
-                agent.history_len()
-            );
-        }
-        "/model" => {
-            if rest.is_empty() {
-                println!("model: {}", agent.model());
-            } else {
-                agent.set_model(&rest);
-                println!("model set to: {rest}");
-            }
-        }
-        _ => return Command::NotACommand,
+        "/tokens" => println!("session tokens: {}", agent.session_tokens()),
+        other => println!("unknown command: {other} (try /help)"),
     }
-    Command::Continue
+    false
 }

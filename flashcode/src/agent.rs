@@ -46,28 +46,14 @@ impl Agent {
         }
     }
 
-    /// Clear the conversation history, keeping the system prompt.
+    /// Clear the conversation history, keeping the system prompt (always index 0).
     /// Session token totals are preserved.
     pub fn reset(&mut self) {
-        self.messages.truncate(0);
-        self.messages.push(Message::system(SYSTEM_PROMPT));
-    }
-
-    pub fn model(&self) -> &str {
-        self.client.model()
-    }
-
-    pub fn set_model(&mut self, model: &str) {
-        self.client.set_model(model);
+        self.messages.truncate(1);
     }
 
     pub fn session_tokens(&self) -> u64 {
         self.session_tokens
-    }
-
-    /// Number of non-system messages currently in the history.
-    pub fn history_len(&self) -> usize {
-        self.messages.iter().filter(|m| m.role != "system").count()
     }
 
     /// Run one user turn to completion (through any number of tool calls).
@@ -102,15 +88,14 @@ impl Agent {
         Ok(())
     }
 
-    /// Run one model call for the current message history. Streams the response
-    /// (printing text live); if the stream connection fails, retries once with
-    /// the non-streaming `chat` path.
+    /// Run one model call for the current message history, streaming the
+    /// response and printing text live as it arrives.
     async fn model_turn(&self) -> Result<crate::api::ChatResult> {
         let mut streamed_any = false;
         let mut stdout = std::io::stdout();
         println!();
 
-        let streamed = self
+        let result = self
             .client
             .chat_stream(&self.messages, tools::definitions(), |delta| {
                 use std::io::Write;
@@ -118,28 +103,12 @@ impl Agent {
                 print!("{delta}");
                 let _ = stdout.flush();
             })
-            .await;
+            .await?;
 
-        match streamed {
-            Ok(result) => {
-                if streamed_any {
-                    println!("\n");
-                }
-                Ok(result)
-            }
-            Err(e) => {
-                // Streaming failed mid-flight: fall back to the robust path.
-                println!("{}", ui::dim(&format!("  [stream failed: {e}; retrying non-streamed]")));
-                let result = self.client.chat(&self.messages, tools::definitions()).await?;
-                if let Some(text) = &result.message.content {
-                    let t = text.trim();
-                    if !t.is_empty() {
-                        println!("{t}\n");
-                    }
-                }
-                Ok(result)
-            }
+        if streamed_any {
+            println!("\n");
         }
+        Ok(result)
     }
 
     fn record_usage(&mut self, usage: &Usage) {
