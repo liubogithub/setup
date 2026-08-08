@@ -104,7 +104,7 @@ impl Agent {
 
     /// Run one model call for the current message history. Streams the response
     /// (printing text live); if the stream connection fails, retries once with
-    /// the non-streaming, auto-retrying `chat` path.
+    /// the non-streaming `chat` path.
     async fn model_turn(&self) -> Result<crate::api::ChatResult> {
         let mut streamed_any = false;
         let mut stdout = std::io::stdout();

@@ -42,6 +42,8 @@ impl Message {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolCall {
     pub id: String,
+    /// Always "function"; serialized back to the API in assistant history, which
+    /// requires it per the OpenAI tool-call schema.
     #[serde(rename = "type", default = "default_tool_type")]
     pub kind: String,
     pub function: FunctionCall,
@@ -170,9 +172,6 @@ struct ToolCallBuilder {
     arguments: String,
 }
 
-/// Number of attempts on transient failures (network errors, 429, 5xx).
-const MAX_ATTEMPTS: usize = 4;
-
 pub struct Client {
     http: reqwest::Client,
     config: Config,
@@ -196,71 +195,43 @@ impl Client {
         self.config.model = model.into();
     }
 
-    /// Send one chat completion request, retrying transient failures with
-    /// exponential backoff. Returns the assistant message and token usage.
+    /// Send one non-streaming chat completion request. Used as the fallback when
+    /// a stream drops mid-response. Returns the assistant message and token usage.
     pub async fn chat(&self, messages: &[Message], tools: Vec<ToolDef>) -> Result<ChatResult> {
         let url = format!("{}/chat/completions", self.config.base_url);
+        let body = ChatRequest {
+            model: &self.config.model,
+            messages,
+            tools,
+            temperature: 0.0,
+            stream: false,
+            stream_options: None,
+        };
 
-        let mut last_err = None;
-        for attempt in 0..MAX_ATTEMPTS {
-            if attempt > 0 {
-                // Backoff: 0.5s, 1s, 2s.
-                let delay = 500u64 << (attempt - 1);
-                tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
-            }
+        let resp = self
+            .http
+            .post(&url)
+            .bearer_auth(&self.config.api_key)
+            .json(&body)
+            .send()
+            .await
+            .context("sending request to DeepSeek")?;
 
-            let body = ChatRequest {
-                model: &self.config.model,
-                messages,
-                tools: tools.clone(),
-                temperature: 0.0,
-                stream: false,
-                stream_options: None,
-            };
-
-            let send = self
-                .http
-                .post(&url)
-                .bearer_auth(&self.config.api_key)
-                .json(&body)
-                .send()
-                .await;
-
-            let resp = match send {
-                Ok(r) => r,
-                Err(e) => {
-                    // Network/timeout error: worth retrying.
-                    last_err = Some(anyhow::anyhow!("request failed: {e}"));
-                    continue;
-                }
-            };
-
-            let status = resp.status();
-            let text = resp.text().await.context("reading response body")?;
-
-            if status.is_success() {
-                let parsed: ChatResponse = serde_json::from_str(&text)
-                    .with_context(|| format!("parsing response: {text}"))?;
-                let message = parsed
-                    .choices
-                    .into_iter()
-                    .next()
-                    .map(|c| c.message)
-                    .context("response contained no choices")?;
-                return Ok(ChatResult { message, usage: parsed.usage });
-            }
-
-            // Retry on rate limits and server errors; fail fast otherwise.
-            let retryable = status.as_u16() == 429 || status.is_server_error();
-            let err = anyhow::anyhow!("DeepSeek API error ({status}): {text}");
-            if retryable {
-                last_err = Some(err);
-                continue;
-            }
-            bail!(err);
+        let status = resp.status();
+        let text = resp.text().await.context("reading response body")?;
+        if !status.is_success() {
+            bail!("DeepSeek API error ({status}): {text}");
         }
 
-        Err(last_err.unwrap_or_else(|| anyhow::anyhow!("request failed after {MAX_ATTEMPTS} attempts")))
+        let parsed: ChatResponse =
+            serde_json::from_str(&text).with_context(|| format!("parsing response: {text}"))?;
+        let message = parsed
+            .choices
+            .into_iter()
+            .next()
+            .map(|c| c.message)
+            .context("response contained no choices")?;
+        Ok(ChatResult { message, usage: parsed.usage })
     }
 
     /// Streaming variant: sends `stream: true`, invokes `on_text` with each
