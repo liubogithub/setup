@@ -289,8 +289,9 @@ fn search(args: &Value) -> Result<String> {
     let root = arg_str_or(args, "path", ".");
     let root_path = resolve_sandboxed(root)?;
 
+    let cwd = std::env::current_dir()?;
     let mut hits = Vec::new();
-    walk_search(&root_path, query, &mut hits)?;
+    walk_search(&root_path, &cwd, query, &mut hits);
 
     if hits.is_empty() {
         Ok(format!("No matches for `{query}`."))
@@ -299,65 +300,158 @@ fn search(args: &Value) -> Result<String> {
     }
 }
 
-/// Recursively walk `dir`, collecting `path:line:text` for lines containing `query`.
-fn walk_search(dir: &std::path::Path, query: &str, hits: &mut Vec<String>) -> Result<()> {
-    const SKIP: &[&str] = &[".git", "target", "node_modules"];
-    let cwd = std::env::current_dir()?;
+/// Match cap for a single `search`, to bound output and work.
+const SEARCH_MAX_HITS: usize = 200;
 
-    let read = match std::fs::read_dir(dir) {
-        Ok(r) => r,
-        Err(_) => return Ok(()),
+/// Recursively walk `dir`, collecting `path:line:text` for lines containing
+/// `query`. Paths are reported relative to `cwd`. Stops early once the hit cap
+/// is reached.
+fn walk_search(dir: &std::path::Path, cwd: &std::path::Path, query: &str, hits: &mut Vec<String>) {
+    const SKIP: &[&str] = &[".git", "target", "node_modules"];
+
+    let Ok(read) = std::fs::read_dir(dir) else {
+        return;
     };
     for entry in read.filter_map(|e| e.ok()) {
+        if hits.len() >= SEARCH_MAX_HITS {
+            return;
+        }
         let path = entry.path();
         let name = entry.file_name().to_string_lossy().into_owned();
         if name.starts_with('.') || SKIP.contains(&name.as_str()) {
             continue;
         }
         if path.is_dir() {
-            walk_search(&path, query, hits)?;
+            walk_search(&path, cwd, query, hits);
         } else if let Ok(text) = std::fs::read_to_string(&path) {
-            let rel = path.strip_prefix(&cwd).unwrap_or(&path);
+            let rel = path.strip_prefix(cwd).unwrap_or(&path);
             for (i, line) in text.lines().enumerate() {
                 if line.contains(query) {
                     hits.push(format!("{}:{}:{}", rel.display(), i + 1, line.trim_end()));
-                    if hits.len() >= 200 {
-                        hits.push("... (stopped at 200 matches)".into());
-                        return Ok(());
+                    if hits.len() >= SEARCH_MAX_HITS {
+                        hits.push(format!("... (stopped at {SEARCH_MAX_HITS} matches)"));
+                        return;
                     }
                 }
             }
         }
     }
-    Ok(())
 }
+
+/// Wall-clock limit for a single `bash` command. Without this, a hanging command
+/// (a server, a REPL, `sleep`) would block the agent forever.
+const BASH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
 
 fn bash(args: &Value) -> Result<String> {
     let command = arg_str(args, "command")?;
-    let output = Command::new("sh")
-        .arg("-c")
-        .arg(command)
-        .output()
-        .map_err(|e| anyhow::anyhow!("could not run command: {e}"))?;
+    run_bash(command, BASH_TIMEOUT)
+}
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let code = output.status.code().unwrap_or(-1);
+/// Run a shell command with a wall-clock timeout. Split from `bash` so the
+/// timeout can be exercised in tests without waiting the full production limit.
+fn run_bash(command: &str, timeout: std::time::Duration) -> Result<String> {
+    use std::os::unix::process::CommandExt;
+
+    // Put the shell in its OWN process group so that on timeout we can signal the
+    // whole group (grandchildren like a `sleep` inside `sh -c`), not just `sh`.
+    let mut cmd = Command::new("sh");
+    cmd.arg("-c")
+        .arg(command)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    unsafe {
+        // setpgid(0, 0): the child becomes the leader of a new process group.
+        cmd.pre_exec(|| {
+            if libc_setpgid() != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| anyhow::anyhow!("could not run command: {e}"))?;
+    let pgid = child.id() as i32; // group id == leader pid
+
+    // Drain stdout/stderr on background threads. Reading inline after the poll
+    // loop would deadlock if the command fills the pipe buffer before exiting.
+    let stdout_handle = child.stdout.take().map(spawn_reader);
+    let stderr_handle = child.stderr.take().map(spawn_reader);
+
+    let start = std::time::Instant::now();
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break Some(status),
+            Ok(None) => {
+                if start.elapsed() >= timeout {
+                    kill_group(pgid);
+                    let _ = child.wait();
+                    break None;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            Err(e) => return Err(anyhow::anyhow!("error waiting on command: {e}")),
+        }
+    };
+
+    // Reader threads finish once the pipes close (which the kill guarantees).
+    let stdout_buf = stdout_handle.map(|h| h.join().unwrap_or_default()).unwrap_or_default();
+    let stderr_buf = stderr_handle.map(|h| h.join().unwrap_or_default()).unwrap_or_default();
 
     let mut out = String::new();
-    if !stdout.is_empty() {
-        out.push_str(&stdout);
+    if !stdout_buf.is_empty() {
+        out.push_str(&stdout_buf);
     }
-    if !stderr.is_empty() {
+    if !stderr_buf.is_empty() {
         if !out.is_empty() && !out.ends_with('\n') {
             out.push('\n');
         }
-        out.push_str(&stderr);
+        out.push_str(&stderr_buf);
     }
     if out.is_empty() {
         out.push_str("(no output)");
     }
-    Ok(format!("{out}\n[exit code: {code}]"))
+
+    match status {
+        Some(s) => Ok(format!("{out}\n[exit code: {}]", s.code().unwrap_or(-1))),
+        None => Ok(format!(
+            "{out}\n[timed out after {}s and was killed]",
+            timeout.as_secs()
+        )),
+    }
+}
+
+/// Read a child pipe to end-of-file on a background thread, returning its text.
+fn spawn_reader<R: std::io::Read + Send + 'static>(
+    mut reader: R,
+) -> std::thread::JoinHandle<String> {
+    std::thread::spawn(move || {
+        let mut buf = String::new();
+        let _ = reader.read_to_string(&mut buf);
+        buf
+    })
+}
+
+// Minimal libc bindings so we can manage the child's process group without
+// pulling in the `libc` crate. Both are async-signal-safe / plain syscalls.
+extern "C" {
+    fn setpgid(pid: i32, pgid: i32) -> i32;
+    fn kill(pid: i32, sig: i32) -> i32;
+}
+
+/// setpgid(0, 0) — make the calling process a new process-group leader.
+/// Called from the child via pre_exec, before it execs the shell.
+fn libc_setpgid() -> i32 {
+    unsafe { setpgid(0, 0) }
+}
+
+/// SIGKILL every process in group `pgid` (kill(-pgid, SIGKILL)).
+fn kill_group(pgid: i32) {
+    const SIGKILL: i32 = 9;
+    unsafe {
+        kill(-pgid, SIGKILL);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -473,5 +567,33 @@ mod tests {
         let args = json!({"command": "ls -la"});
         let preview = preview("bash", &args).unwrap();
         assert!(preview.contains("ls -la"));
+    }
+
+    #[test]
+    fn bash_captures_stdout_and_exit_code() {
+        let out = bash(&json!({"command": "printf hello"})).unwrap();
+        assert!(out.contains("hello"));
+        assert!(out.contains("[exit code: 0]"));
+    }
+
+    #[test]
+    fn bash_reports_nonzero_exit() {
+        let out = bash(&json!({"command": "exit 3"})).unwrap();
+        assert!(out.contains("[exit code: 3]"));
+    }
+
+    #[test]
+    fn bash_captures_stderr() {
+        let out = bash(&json!({"command": "printf oops 1>&2"})).unwrap();
+        assert!(out.contains("oops"));
+    }
+
+    #[test]
+    fn bash_kills_on_timeout() {
+        let start = std::time::Instant::now();
+        let out = run_bash("sleep 30", std::time::Duration::from_millis(200)).unwrap();
+        // Must return near the timeout, not after the full 30s sleep.
+        assert!(start.elapsed() < std::time::Duration::from_secs(5));
+        assert!(out.contains("timed out"));
     }
 }

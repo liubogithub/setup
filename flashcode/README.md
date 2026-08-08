@@ -93,5 +93,8 @@ truncation, the permission classifier, and the diff/command previews.
 
 - `deepseek-v4-flash` is used as the default model ID; set `DEEPSEEK_MODEL` to whatever
   ID your endpoint actually serves (e.g. `deepseek-chat`).
-- The `bash` tool runs commands in the working directory but still resolves file
-  paths through the sandbox; it is gated behind the permission prompt by default.
+- The `bash` tool runs commands in the working directory, gated behind the
+  permission prompt by default. Each command runs in its own process group with a
+  120s wall-clock timeout; on timeout the whole group is killed, so a hanging
+  command (a server, a REPL, `sleep`) can't block the agent. Output is streamed
+  off the pipes concurrently, so large output won't deadlock.
