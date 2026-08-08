@@ -8,8 +8,14 @@ current working directory.
 ## Features
 
 - Interactive REPL and one-shot (`--prompt`) modes
-- Tool calling: `read_file`, `write_file`, `edit_file`
-- Permission gate: confirms before any file write/edit (bypass with `--yes`)
+- Tools: `read_file`, `write_file`, `edit_file`, `list_files`, `search`, `bash`
+- Permission gate with a diff preview before each mutating action; answer
+  **y**es / **n**o / **a**llow-all-this-session (bypass entirely with `--yes`)
+- Sandboxed: all file/shell access is confined to the working directory tree
+- Robust API client: request timeout + automatic retry with backoff on
+  transient errors (network failures, HTTP 429/5xx)
+- Per-call and per-session token usage reporting
+- Colored output (auto-disabled when piped or when `NO_COLOR` is set)
 - Configurable model / base URL / key via env vars or a config file
 
 ## Install
@@ -61,13 +67,15 @@ In the REPL, type `/exit` or press Ctrl-D to quit.
 | Module        | Responsibility                                                        |
 | ------------- | --------------------------------------------------------------------- |
 | `config.rs`   | Load settings from env + `config.toml`                                |
-| `api.rs`      | DeepSeek chat client; OpenAI-compatible request/response + tool types |
-| `tools.rs`    | Tool JSON schemas and their handlers                                  |
+| `api.rs`      | DeepSeek chat client; OpenAI-compatible types, retries, token usage   |
+| `tools.rs`    | Tool JSON schemas, handlers, sandbox, and diff previews               |
 | `agent.rs`    | The agent loop: chat → run tools → feed results back, permission gate |
+| `ui.rs`       | ANSI coloring helpers (TTY- and `NO_COLOR`-aware)                     |
 | `main.rs`     | CLI parsing and the interactive REPL                                  |
 
 ## Notes
 
 - `deepseek-v4-flash` is used as the default model ID; set `DEEPSEEK_MODEL` to whatever
   ID your endpoint actually serves (e.g. `deepseek-chat`).
-- v1 intentionally ships file tools only — no shell execution.
+- The `bash` tool runs commands in the working directory but still resolves file
+  paths through the sandbox; it is gated behind the permission prompt by default.

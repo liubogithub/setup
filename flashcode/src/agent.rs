@@ -5,24 +5,35 @@ use anyhow::Result;
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
-use crate::api::{Client, Message};
+use crate::api::{Client, Message, Usage};
 use crate::tools;
+use crate::ui;
 
 const SYSTEM_PROMPT: &str = "\
 You are flashcode, a concise coding assistant running in a terminal. You help the \
 user with software tasks in their current working directory. You have tools to read, \
-write, and edit files. Prefer edit_file for small changes and read a file before \
-editing it. When you have finished the task, reply with a short summary and no tool \
-calls. Keep prose brief.";
+write, edit, list, and search files, and to run shell commands. Prefer edit_file for \
+small changes and read a file before editing it. Use bash to build and run tests to \
+verify your work. When you have finished the task, reply with a short summary and no \
+tool calls. Keep prose brief.";
 
 /// Guards a single loop against runaway tool-calling.
 const MAX_STEPS: usize = 50;
 
+/// Outcome of a single permission prompt.
+enum Decision {
+    Allow,
+    AllowAll,
+    Deny,
+}
+
 pub struct Agent {
     client: Client,
     messages: Vec<Message>,
-    /// When true, write/edit tools run without asking for confirmation.
+    /// When true, mutating tools run without asking (set by --yes or "allow all").
     auto_approve: bool,
+    /// Running token total across the session.
+    session_tokens: u64,
 }
 
 impl Agent {
@@ -31,6 +42,7 @@ impl Agent {
             client,
             messages: vec![Message::system(SYSTEM_PROMPT)],
             auto_approve,
+            session_tokens: 0,
         }
     }
 
@@ -39,10 +51,15 @@ impl Agent {
         self.messages.push(Message::user(user_input));
 
         for _ in 0..MAX_STEPS {
-            let reply = self
+            let result = self
                 .client
                 .chat(&self.messages, tools::definitions())
                 .await?;
+
+            if let Some(usage) = &result.usage {
+                self.record_usage(usage);
+            }
+            let reply = result.message;
 
             // Print any assistant prose.
             if let Some(text) = &reply.content {
@@ -55,13 +72,10 @@ impl Agent {
             let tool_calls = reply.tool_calls.clone();
             self.messages.push(reply);
 
-            let Some(calls) = tool_calls else {
+            let Some(calls) = tool_calls.filter(|c| !c.is_empty()) else {
                 // No tool calls => turn is complete.
                 return Ok(());
             };
-            if calls.is_empty() {
-                return Ok(());
-            }
 
             for call in calls {
                 let result = self.execute_call(&call).await;
@@ -69,12 +83,28 @@ impl Agent {
             }
         }
 
-        println!("(stopped: reached the maximum of {MAX_STEPS} steps for this turn)");
+        println!("{}", ui::dim(&format!(
+            "(stopped: reached the maximum of {MAX_STEPS} steps for this turn)"
+        )));
         Ok(())
     }
 
-    /// Execute a single tool call, applying the permission gate for write tools.
-    async fn execute_call(&self, call: &crate::api::ToolCall) -> String {
+    fn record_usage(&mut self, usage: &Usage) {
+        self.session_tokens += usage.total_tokens;
+        println!(
+            "{}",
+            ui::dim(&format!(
+                "  [tokens: {} this call ({}+{}), {} session]",
+                usage.total_tokens,
+                usage.prompt_tokens,
+                usage.completion_tokens,
+                self.session_tokens
+            ))
+        );
+    }
+
+    /// Execute a single tool call, applying the permission gate for mutating tools.
+    async fn execute_call(&mut self, call: &crate::api::ToolCall) -> String {
         let name = call.function.name.as_str();
 
         let args: Value = match serde_json::from_str(&call.function.arguments) {
@@ -87,12 +117,18 @@ impl Agent {
             }
         };
 
-        println!("  \u{2192} {}", describe_call(name, &args));
+        println!("  {} {}", ui::cyan("\u{2192}"), describe_call(name, &args));
 
-        if tools::is_write_tool(name) && !self.auto_approve {
+        if tools::needs_permission(name) && !self.auto_approve {
+            if let Some(preview) = tools::preview(name, &args) {
+                for line in preview.lines() {
+                    println!("    {}", ui::diff_line(line));
+                }
+            }
             match prompt_permission().await {
-                Ok(true) => {}
-                Ok(false) => return "Error: user denied this action.".to_string(),
+                Ok(Decision::Allow) => {}
+                Ok(Decision::AllowAll) => self.auto_approve = true,
+                Ok(Decision::Deny) => return "Error: user denied this action.".to_string(),
                 Err(e) => return format!("Error: could not read confirmation: {e}"),
             }
         }
@@ -103,24 +139,37 @@ impl Agent {
 
 /// A one-line, human-readable description of a tool call for the terminal.
 fn describe_call(name: &str, args: &Value) -> String {
-    let path = args.get("path").and_then(Value::as_str).unwrap_or("?");
+    let path = args.get("path").and_then(Value::as_str).unwrap_or("");
     match name {
-        "read_file" => format!("read_file {path}"),
-        "write_file" => format!("write_file {path}"),
-        "edit_file" => format!("edit_file {path}"),
+        "read_file" | "write_file" | "edit_file" | "list_files" => {
+            format!("{name} {path}")
+        }
+        "search" => {
+            let q = args.get("query").and_then(Value::as_str).unwrap_or("");
+            format!("search \"{q}\"")
+        }
+        "bash" => {
+            let c = args.get("command").and_then(Value::as_str).unwrap_or("");
+            format!("bash: {c}")
+        }
         other => format!("{other} {args}"),
     }
 }
 
-/// Ask the user to approve a write/edit. Returns Ok(true) on yes.
-async fn prompt_permission() -> Result<bool> {
+/// Ask the user to approve a mutating action. `a` allows all for the session.
+async fn prompt_permission() -> Result<Decision> {
     let mut stdout = tokio::io::stdout();
-    stdout.write_all(b"    Allow this write? [y/N] ").await?;
+    stdout
+        .write_all(ui::yellow("    Allow? [y]es / [n]o / [a]llow all: ").as_bytes())
+        .await?;
     stdout.flush().await?;
 
     let mut line = String::new();
     let mut reader = BufReader::new(tokio::io::stdin());
     reader.read_line(&mut line).await?;
-    let answer = line.trim().to_lowercase();
-    Ok(answer == "y" || answer == "yes")
+    Ok(match line.trim().to_lowercase().as_str() {
+        "y" | "yes" => Decision::Allow,
+        "a" | "all" => Decision::AllowAll,
+        _ => Decision::Deny,
+    })
 }

@@ -84,12 +84,34 @@ struct ChatRequest<'a> {
 #[derive(Deserialize)]
 struct ChatResponse {
     choices: Vec<Choice>,
+    #[serde(default)]
+    usage: Option<Usage>,
 }
 
 #[derive(Deserialize)]
 struct Choice {
     message: Message,
 }
+
+/// Token accounting returned by the API (fields optional across providers).
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct Usage {
+    #[serde(default)]
+    pub prompt_tokens: u64,
+    #[serde(default)]
+    pub completion_tokens: u64,
+    #[serde(default)]
+    pub total_tokens: u64,
+}
+
+/// One assistant turn plus its token usage.
+pub struct ChatResult {
+    pub message: Message,
+    pub usage: Option<Usage>,
+}
+
+/// Number of attempts on transient failures (network errors, 429, 5xx).
+const MAX_ATTEMPTS: usize = 4;
 
 pub struct Client {
     http: reqwest::Client,
@@ -98,43 +120,75 @@ pub struct Client {
 
 impl Client {
     pub fn new(config: Config) -> Self {
-        Client { http: reqwest::Client::new(), config }
+        let http = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(120))
+            .build()
+            .expect("failed to build HTTP client");
+        Client { http, config }
     }
 
-    /// Send one chat completion request and return the assistant message.
-    pub async fn chat(&self, messages: &[Message], tools: Vec<ToolDef>) -> Result<Message> {
+    /// Send one chat completion request, retrying transient failures with
+    /// exponential backoff. Returns the assistant message and token usage.
+    pub async fn chat(&self, messages: &[Message], tools: Vec<ToolDef>) -> Result<ChatResult> {
         let url = format!("{}/chat/completions", self.config.base_url);
-        let body = ChatRequest {
-            model: &self.config.model,
-            messages,
-            tools,
-            temperature: 0.0,
-        };
 
-        let resp = self
-            .http
-            .post(&url)
-            .bearer_auth(&self.config.api_key)
-            .json(&body)
-            .send()
-            .await
-            .context("sending request to DeepSeek")?;
+        let mut last_err = None;
+        for attempt in 0..MAX_ATTEMPTS {
+            if attempt > 0 {
+                // Backoff: 0.5s, 1s, 2s.
+                let delay = 500u64 << (attempt - 1);
+                tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
+            }
 
-        let status = resp.status();
-        let text = resp.text().await.context("reading response body")?;
+            let body = ChatRequest {
+                model: &self.config.model,
+                messages,
+                tools: tools.clone(),
+                temperature: 0.0,
+            };
 
-        if !status.is_success() {
-            bail!("DeepSeek API error ({}): {}", status, text);
+            let send = self
+                .http
+                .post(&url)
+                .bearer_auth(&self.config.api_key)
+                .json(&body)
+                .send()
+                .await;
+
+            let resp = match send {
+                Ok(r) => r,
+                Err(e) => {
+                    // Network/timeout error: worth retrying.
+                    last_err = Some(anyhow::anyhow!("request failed: {e}"));
+                    continue;
+                }
+            };
+
+            let status = resp.status();
+            let text = resp.text().await.context("reading response body")?;
+
+            if status.is_success() {
+                let parsed: ChatResponse = serde_json::from_str(&text)
+                    .with_context(|| format!("parsing response: {text}"))?;
+                let message = parsed
+                    .choices
+                    .into_iter()
+                    .next()
+                    .map(|c| c.message)
+                    .context("response contained no choices")?;
+                return Ok(ChatResult { message, usage: parsed.usage });
+            }
+
+            // Retry on rate limits and server errors; fail fast otherwise.
+            let retryable = status.as_u16() == 429 || status.is_server_error();
+            let err = anyhow::anyhow!("DeepSeek API error ({status}): {text}");
+            if retryable {
+                last_err = Some(err);
+                continue;
+            }
+            bail!(err);
         }
 
-        let parsed: ChatResponse =
-            serde_json::from_str(&text).with_context(|| format!("parsing response: {text}"))?;
-
-        parsed
-            .choices
-            .into_iter()
-            .next()
-            .map(|c| c.message)
-            .context("response contained no choices")
+        Err(last_err.unwrap_or_else(|| anyhow::anyhow!("request failed after {MAX_ATTEMPTS} attempts")))
     }
 }
