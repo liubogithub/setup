@@ -78,6 +78,21 @@ cargo test
 Unit tests cover the path sandbox (escape rejection, normalization), output
 truncation, the permission classifier, and the diff/command previews.
 
+## Self-improvement loop
+
+`self_improve.sh` lets flashcode improve its own source, gated by the test suite:
+
+```sh
+DEEPSEEK_API_KEY=sk-... ./self_improve.sh 5   # 5 iterations
+```
+
+Each round operates on a **throwaway copy** of the repo (never your working tree).
+It runs `cargo test`; if red it asks flashcode to fix the failure, if green it asks
+for one concrete improvement. It then re-runs the tests and **commits the round only
+if they pass, reverting otherwise** — so the test suite is the fitness function and
+nothing unverified survives. The improved copy is left in a temp dir for you to
+review and diff back in.
+
 ## Architecture
 
 | Module        | Responsibility                                                        |
